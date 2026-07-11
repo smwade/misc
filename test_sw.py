@@ -64,6 +64,7 @@ class SwTests(unittest.TestCase):
                 os.chdir(original)
             self.assertEqual(config["aliases"]["/guide.html"], "guide.html")
             self.assertEqual(config["aliases"]["/details.html"], "details.html")
+            self.assertEqual(config["primary"], "/guide.html")
             self.assertEqual(json.loads((root / ".sw.json").read_text()), config)
 
 

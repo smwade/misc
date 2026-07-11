@@ -101,19 +101,19 @@ def init_project(args: argparse.Namespace) -> tuple[Path, dict]:
         output = "."
         include = sorted(path.name for path in root.glob("*.html"))
         entry = source_abs.name
+        primary = normalize_public_path(args.url or source_abs.name)
+        aliases[primary] = entry
         for html_name in include:
-            aliases[normalize_public_path(html_name)] = html_name
+            if html_name != entry:
+                aliases[normalize_public_path(html_name)] = html_name
     else:
         output = os.path.relpath(source_abs, root)
         include = ["**/*"]
         entry = args.entry or "index.html"
+        primary = ""
         if args.url:
-            aliases[normalize_public_path(args.url)] = safe_relative(entry)
-
-    if args.url and source_abs.is_file():
-        aliases = {normalize_public_path(args.url): source_abs.name, **{
-            path: target for path, target in aliases.items() if target != source_abs.name
-        }}
+            primary = normalize_public_path(args.url)
+            aliases[primary] = safe_relative(entry)
 
     config = {
         "version": 1,
@@ -122,6 +122,7 @@ def init_project(args: argparse.Namespace) -> tuple[Path, dict]:
         "entry": safe_relative(entry),
         "include": include,
         "aliases": aliases,
+        "primary": primary,
         "install": args.install or "",
         "build": args.build or "",
     }
@@ -386,6 +387,7 @@ def publish(args: argparse.Namespace) -> None:
         "publishedAt": now,
         "files": files,
         "aliases": aliases,
+        "primaryPath": config.get("primary") or next(iter(aliases), ""),
     }
     write_registry(registry)
     invalidate([*aliases, f"/{GLOBAL_CONFIG['internal_prefix']}/{config['name']}/*"])
@@ -419,7 +421,9 @@ def list_projects(_args: argparse.Namespace) -> None:
         name = Path(item["Key"]).stem
         registry = read_registry(name) or {}
         aliases = registry.get("aliases", {})
-        url = next(iter(aliases), f"/{GLOBAL_CONFIG['internal_prefix']}/{name}/")
+        url = registry.get("primaryPath") or next(
+            iter(aliases), f"/{GLOBAL_CONFIG['internal_prefix']}/{name}/"
+        )
         print(f"{name:24} {GLOBAL_CONFIG['domain']}{url}")
 
 
@@ -447,7 +451,9 @@ def open_project(_args: argparse.Namespace) -> None:
     if not registry:
         raise SwError(f"{config['name']} is not published.")
     aliases = registry.get("aliases", {})
-    path = next(iter(aliases), f"/{GLOBAL_CONFIG['internal_prefix']}/{config['name']}/")
+    path = registry.get("primaryPath") or next(
+        iter(aliases), f"/{GLOBAL_CONFIG['internal_prefix']}/{config['name']}/"
+    )
     url = f"{GLOBAL_CONFIG['domain']}{path}"
     print(url)
     webbrowser.open(url)
