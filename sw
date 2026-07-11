@@ -455,7 +455,7 @@ def publish(args: argparse.Namespace) -> None:
                 "project": config["name"],
                 "publishedAt": now,
             }
-            for public_path, relative in aliases.items()
+            for public_path, relative in config.get("aliases", {}).items()
         ],
     }
     if not registry["pages"]:
