@@ -1,0 +1,8 @@
+{
+  "bucket": "seanwade.com",
+  "distribution_id": "E20VQTC0TY7DFQ",
+  "domain": "https://seanwade.com",
+  "internal_prefix": "misc",
+  "kvs_arn": "arn:aws:cloudfront::301701475594:key-value-store/a396c3d4-870e-444c-93d7-7749a80c593d",
+  "github_role_arn": ""
+}
