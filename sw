@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import html
 import json
-import mimetypes
 import os
 import re
 import shutil
@@ -285,7 +285,7 @@ def read_registry(name: str) -> dict | None:
     return json.loads(result.stdout)
 
 
-def write_registry(data: dict) -> None:
+def write_json_key(data: dict, key: str) -> None:
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
         json.dump(data, handle, indent=2)
         handle.write("\n")
@@ -295,12 +295,62 @@ def write_registry(data: dict) -> None:
             "s3",
             "cp",
             temp_name,
-            f"s3://{GLOBAL_CONFIG['bucket']}/{registry_key(data['name'])}",
+            f"s3://{GLOBAL_CONFIG['bucket']}/{key}",
             "--content-type",
             "application/json",
+            "--cache-control",
+            "max-age=0,must-revalidate",
         )
     finally:
         Path(temp_name).unlink(missing_ok=True)
+
+
+def write_registry(data: dict) -> None:
+    write_json_key(data, registry_key(data["name"]))
+
+
+def html_title(path: Path) -> str:
+    if path.suffix.lower() not in {".html", ".htm"}:
+        return path.stem.replace("-", " ").strip().title()
+    text = path.read_text(errors="replace")
+    match = re.search(r"<title[^>]*>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
+    if not match:
+        return path.stem.replace("-", " ").strip().title()
+    return re.sub(r"\s+", " ", html.unescape(match.group(1))).strip()
+
+
+def catalog_pages(registries: list[dict]) -> list[dict]:
+    pages = [page for registry in registries for page in registry.get("pages", [])]
+    return sorted(pages, key=lambda page: (page["project"].lower(), page["title"].lower()))
+
+
+def refresh_catalog() -> dict:
+    raw = aws(
+        "s3api",
+        "list-objects-v2",
+        "--bucket",
+        GLOBAL_CONFIG["bucket"],
+        "--prefix",
+        f"{REGISTRY_PREFIX}/",
+        "--output",
+        "json",
+        capture=True,
+    )
+    registries: list[dict] = []
+    for item in json.loads(raw).get("Contents", []):
+        key = item["Key"]
+        if key == f"{REGISTRY_PREFIX}/index.json" or not key.endswith(".json"):
+            continue
+        registry = read_registry(Path(key).stem)
+        if registry:
+            registries.append(registry)
+    catalog = {
+        "version": 1,
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
+        "pages": catalog_pages(registries),
+    }
+    write_json_key(catalog, f"{REGISTRY_PREFIX}/index.json")
+    return catalog
 
 
 def internal_target(name: str, relative: str) -> str:
@@ -398,9 +448,35 @@ def publish(args: argparse.Namespace) -> None:
         "files": files,
         "aliases": aliases,
         "primaryPath": config.get("primary") or next(iter(aliases), ""),
+        "pages": [
+            {
+                "title": html_title(output / relative),
+                "url": public_path,
+                "project": config["name"],
+                "publishedAt": now,
+            }
+            for public_path, relative in aliases.items()
+        ],
     }
+    if not registry["pages"]:
+        entry = safe_relative(config.get("entry", "index.html"))
+        registry["pages"] = [
+            {
+                "title": html_title(output / entry),
+                "url": f"/{GLOBAL_CONFIG['internal_prefix']}/{config['name']}/",
+                "project": config["name"],
+                "publishedAt": now,
+            }
+        ]
     write_registry(registry)
-    invalidate([*aliases, f"/{GLOBAL_CONFIG['internal_prefix']}/{config['name']}/*"])
+    refresh_catalog()
+    invalidate(
+        [
+            *aliases,
+            f"/{GLOBAL_CONFIG['internal_prefix']}/{config['name']}/*",
+            f"/{REGISTRY_PREFIX}/index.json",
+        ]
+    )
 
     if aliases:
         for public_path in aliases:
@@ -423,7 +499,11 @@ def list_projects(_args: argparse.Namespace) -> None:
         "json",
         capture=True,
     )
-    objects = json.loads(raw).get("Contents", [])
+    objects = [
+        item
+        for item in json.loads(raw).get("Contents", [])
+        if item["Key"] != f"{REGISTRY_PREFIX}/index.json"
+    ]
     if not objects:
         print("No misc projects are published.")
         return
@@ -490,7 +570,14 @@ def unpublish(args: argparse.Namespace) -> None:
             removed_paths.append(public_path)
     aws("s3", "rm", f"s3://{GLOBAL_CONFIG['bucket']}/{GLOBAL_CONFIG['internal_prefix']}/{name}/", "--recursive")
     aws("s3", "rm", f"s3://{GLOBAL_CONFIG['bucket']}/{registry_key(name)}")
-    invalidate([*removed_paths, f"/{GLOBAL_CONFIG['internal_prefix']}/{name}/*"])
+    refresh_catalog()
+    invalidate(
+        [
+            *removed_paths,
+            f"/{GLOBAL_CONFIG['internal_prefix']}/{name}/*",
+            f"/{REGISTRY_PREFIX}/index.json",
+        ]
+    )
     print(f"Unpublished {name}.")
 
 

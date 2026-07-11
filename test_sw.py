@@ -30,6 +30,19 @@ class SwTests(unittest.TestCase):
         with self.assertRaises(sw.SwError):
             sw.validate_name("Particle Lab")
 
+    def test_html_title(self):
+        with tempfile.TemporaryDirectory() as temp:
+            page = Path(temp) / "sample-page.html"
+            page.write_text("<title>  Sample &amp; Useful\nPage </title>")
+            self.assertEqual(sw.html_title(page), "Sample & Useful Page")
+
+    def test_catalog_pages_are_sorted(self):
+        registries = [
+            {"pages": [{"title": "Zulu", "project": "food", "url": "/z"}]},
+            {"pages": [{"title": "Alpha", "project": "art", "url": "/a"}]},
+        ]
+        self.assertEqual([page["title"] for page in sw.catalog_pages(registries)], ["Alpha", "Zulu"])
+
     def test_collect_single_file_project(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
