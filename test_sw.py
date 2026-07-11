@@ -85,10 +85,17 @@ class SwTests(unittest.TestCase):
                 _project_root, config = sw.init_project(args)
             finally:
                 os.chdir(original)
-            self.assertEqual(config["aliases"]["/guide.html"], "guide.html")
-            self.assertEqual(config["aliases"]["/details.html"], "details.html")
-            self.assertEqual(config["primary"], "/guide.html")
+            self.assertEqual(config["aliases"], {})
+            self.assertEqual(config["primary"], "/guide/")
             self.assertEqual(json.loads((root / ".sw.json").read_text()), config)
+
+    def test_project_route_value(self):
+        config = {"name": "food", "entry": "guide.html"}
+        self.assertEqual(sw.project_route_key("food"), "project:food")
+        self.assertEqual(
+            json.loads(sw.project_route_value(config)),
+            {"prefix": "/misc/food", "entry": "guide.html"},
+        )
 
 
 if __name__ == "__main__":

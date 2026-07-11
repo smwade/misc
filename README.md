@@ -1,9 +1,8 @@
 # sw misc-site publisher
 
 `sw` publishes self-contained static projects to `seanwade.com`. Project files
-are stored under the protected internal `misc/` namespace. Optional root aliases
-can expose a clean URL such as `https://seanwade.com/demo.html` without moving
-the object out of that namespace.
+are stored under the protected internal `misc/` namespace and exposed using the
+project folder name, such as `https://seanwade.com/particle-lab/`.
 
 ## Typical use
 
@@ -12,6 +11,10 @@ From a folder containing a standalone HTML file:
 ```sh
 sw publish guide.html
 ```
+
+If the folder is named `food`, the project is available at `seanwade.com/food/`
+and its files retain their names below that path, such as
+`seanwade.com/food/guide.html`.
 
 The first publish creates `.sw.json`. Later updates are simply:
 

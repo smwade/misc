@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 import webbrowser
@@ -101,11 +102,9 @@ def init_project(args: argparse.Namespace) -> tuple[Path, dict]:
         output = "."
         include = sorted(path.name for path in root.glob("*.html"))
         entry = source_abs.name
-        primary = normalize_public_path(args.url or source_abs.name)
-        aliases[primary] = entry
-        for html_name in include:
-            if html_name != entry:
-                aliases[normalize_public_path(html_name)] = html_name
+        primary = f"/{name}/"
+        if args.url:
+            aliases[normalize_public_path(args.url)] = entry
     else:
         output = os.path.relpath(source_abs, root)
         include = ["**/*"]
@@ -357,6 +356,20 @@ def internal_target(name: str, relative: str) -> str:
     return f"/{GLOBAL_CONFIG['internal_prefix']}/{name}/{safe_relative(relative)}"
 
 
+def project_route_key(name: str) -> str:
+    return f"project:{validate_name(name)}"
+
+
+def project_route_value(config: dict) -> str:
+    return json.dumps(
+        {
+            "prefix": f"/{GLOBAL_CONFIG['internal_prefix']}/{config['name']}",
+            "entry": safe_relative(config.get("entry", "index.html")),
+        },
+        separators=(",", ":"),
+    )
+
+
 def validate_aliases(config: dict, files: list[str], *, force: bool) -> dict[str, str]:
     available = set(files)
     resolved: dict[str, str] = {}
@@ -438,8 +451,16 @@ def publish(args: argparse.Namespace) -> None:
     for public_path, target in aliases.items():
         if kvs_get(public_path) != target:
             etag = kvs_put(public_path, target, etag)
+    route_key = project_route_key(config["name"])
+    route_value = project_route_value(config)
+    route_changed = kvs_get(route_key) != route_value
+    if route_changed:
+        etag = kvs_put(route_key, route_value, etag)
+        # Let the edge key-value update propagate before clearing cached 404s.
+        time.sleep(5)
 
     now = datetime.now(timezone.utc).isoformat()
+    project_path = f"/{config['name']}/"
     registry = {
         "version": 1,
         "name": config["name"],
@@ -447,44 +468,32 @@ def publish(args: argparse.Namespace) -> None:
         "publishedAt": now,
         "files": files,
         "aliases": aliases,
-        "primaryPath": config.get("primary") or next(iter(aliases), ""),
+        "primaryPath": project_path,
         "pages": [
             {
-                "title": html_title(output / relative),
-                "url": public_path,
+                "title": config.get("title") or config["name"].replace("-", " ").title(),
+                "url": project_path,
                 "project": config["name"],
                 "publishedAt": now,
             }
-            for public_path, relative in config.get("aliases", {}).items()
         ],
     }
-    if not registry["pages"]:
-        entry = safe_relative(config.get("entry", "index.html"))
-        registry["pages"] = [
-            {
-                "title": html_title(output / entry),
-                "url": f"/{GLOBAL_CONFIG['internal_prefix']}/{config['name']}/",
-                "project": config["name"],
-                "publishedAt": now,
-            }
-        ]
     write_registry(registry)
     refresh_catalog()
     invalidate(
         [
             *aliases,
+            f"/{config['name']}",
+            f"/{config['name']}/*",
             f"/{GLOBAL_CONFIG['internal_prefix']}/{config['name']}/*",
             f"/{REGISTRY_PREFIX}/index.json",
         ]
     )
 
-    if aliases:
-        for public_path in aliases:
-            print(f"Published: {GLOBAL_CONFIG['domain']}{public_path}")
-    else:
-        print(
-            f"Published: {GLOBAL_CONFIG['domain']}/{GLOBAL_CONFIG['internal_prefix']}/{config['name']}/"
-        )
+    entry = safe_relative(config.get("entry", "index.html"))
+    print(f"Published: {GLOBAL_CONFIG['domain']}{project_path}")
+    if entry != "index.html":
+        print(f"Entry:     {GLOBAL_CONFIG['domain']}{project_path}{entry}")
 
 
 def list_projects(_args: argparse.Namespace) -> None:
@@ -526,13 +535,13 @@ def status(_args: argparse.Namespace) -> None:
     print(f"Project:   {config['name']}")
     print(f"Source:    {root}")
     print(f"Published: {registry['publishedAt']}")
-    for public_path in registry.get("aliases", {}):
-        url = f"{GLOBAL_CONFIG['domain']}{public_path}"
-        try:
-            with urllib.request.urlopen(url, timeout=10) as response:
-                print(f"Live:      {response.status} {url}")
-        except urllib.error.URLError as exc:
-            print(f"Live:      ERROR {url} ({exc})")
+    public_path = registry.get("primaryPath", f"/{config['name']}/")
+    url = f"{GLOBAL_CONFIG['domain']}{public_path}"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            print(f"Live:      {response.status} {url}")
+    except urllib.error.URLError as exc:
+        print(f"Live:      ERROR {url} ({exc})")
 
 
 def open_project(_args: argparse.Namespace) -> None:
@@ -568,12 +577,17 @@ def unpublish(args: argparse.Namespace) -> None:
         if kvs_get(public_path) == target:
             etag = kvs_delete(public_path, etag)
             removed_paths.append(public_path)
+    route_key = project_route_key(name)
+    if kvs_get(route_key) is not None:
+        etag = kvs_delete(route_key, etag)
     aws("s3", "rm", f"s3://{GLOBAL_CONFIG['bucket']}/{GLOBAL_CONFIG['internal_prefix']}/{name}/", "--recursive")
     aws("s3", "rm", f"s3://{GLOBAL_CONFIG['bucket']}/{registry_key(name)}")
     refresh_catalog()
     invalidate(
         [
             *removed_paths,
+            f"/{name}",
+            f"/{name}/*",
             f"/{GLOBAL_CONFIG['internal_prefix']}/{name}/*",
             f"/{REGISTRY_PREFIX}/index.json",
         ]
