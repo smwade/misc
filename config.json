@@ -4,5 +4,5 @@
   "domain": "https://seanwade.com",
   "internal_prefix": "misc",
   "kvs_arn": "arn:aws:cloudfront::301701475594:key-value-store/a396c3d4-870e-444c-93d7-7749a80c593d",
-  "github_role_arn": ""
+  "github_role_arn": "arn:aws:iam::301701475594:role/seanwade-misc-publisher"
 }

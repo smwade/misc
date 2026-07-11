@@ -179,6 +179,13 @@ def run_build(root: Path, config: dict) -> None:
         run(["/bin/zsh", "-lc", config["build"]], cwd=root)
 
 
+def build_project(_args: argparse.Namespace) -> None:
+    root, config = find_project()
+    run_build(root, config)
+    output, files = collect_files(root, config)
+    print(f"Build ready: {len(files)} file(s) in {output}")
+
+
 def kvs_description() -> dict:
     raw = aws(
         "cloudfront-keyvaluestore",
@@ -339,7 +346,8 @@ def publish(args: argparse.Namespace) -> None:
         root, config = init_project(init_args)
 
     validate_name(config["name"])
-    run_build(root, config)
+    if not args.skip_build:
+        run_build(root, config)
     output, files = collect_files(root, config)
     aliases = validate_aliases(config, files, force=args.force)
     previous = read_registry(config["name"]) or {}
@@ -490,6 +498,98 @@ def preview(_args: argparse.Namespace) -> None:
             pass
 
 
+def github_repository(root: Path) -> str:
+    remote = run(["git", "config", "--get", "remote.origin.url"], cwd=root, capture=True)
+    match = re.search(r"github\.com(?::|/)([^/]+/[^/]+?)(?:\.git)?$", remote)
+    if not match:
+        raise SwError("The current project needs a GitHub origin before enabling auto-publish.")
+    repository = match.group(1)
+    if not repository.startswith("smwade/"):
+        raise SwError("Auto-publish is restricted to repositories owned by smwade.")
+    return repository
+
+
+def register_github_subject(repository: str) -> None:
+    role_name = GLOBAL_CONFIG["github_role_arn"].rsplit("/", 1)[-1]
+    raw = aws("iam", "get-role", "--role-name", role_name, "--output", "json", capture=True)
+    policy = json.loads(raw)["Role"]["AssumeRolePolicyDocument"]
+    condition = policy["Statement"][0]["Condition"]["StringEquals"]
+    current = condition["token.actions.githubusercontent.com:sub"]
+    subjects = [current] if isinstance(current, str) else list(current)
+    subject = f"repo:{repository}:ref:refs/heads/main"
+    if subject not in subjects:
+        subjects.append(subject)
+        condition["token.actions.githubusercontent.com:sub"] = sorted(subjects)
+        aws(
+            "iam",
+            "update-assume-role-policy",
+            "--role-name",
+            role_name,
+            "--policy-document",
+            json.dumps(policy, separators=(",", ":")),
+        )
+
+
+def enable_github(_args: argparse.Namespace) -> None:
+    root, _config = find_project()
+    repository = github_repository(root)
+    register_github_subject(repository)
+    workflow = root / ".github" / "workflows" / "publish-misc.yml"
+    workflow.parent.mkdir(parents=True, exist_ok=True)
+    workflow.write_text(
+        f"""name: Publish misc site
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-misc-${{{{ github.repository }}}}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v6
+
+      - name: Check out sw publisher
+        uses: actions/checkout@v6
+        with:
+          repository: smwade/misc
+          path: .sw-tool
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version: 1.3.8
+
+      - name: Build and validate
+        run: python3 .sw-tool/sw build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.2.2
+        with:
+          role-to-assume: {GLOBAL_CONFIG['github_role_arn']}
+          aws-region: us-east-1
+          role-session-name: sw-${{{{ github.run_id }}}}
+
+      - name: Publish
+        run: python3 .sw-tool/sw publish --skip-build
+"""
+    )
+    print(f"Created {workflow}")
+    print(f"Registered {repository} main for AWS OIDC publishing.")
+    print("Commit and push .sw.json plus the workflow to enable automatic publishing.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sw", description="Publish standalone sites to seanwade.com")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -509,7 +609,11 @@ def build_parser() -> argparse.ArgumentParser:
     publish_cmd.add_argument("--name")
     publish_cmd.add_argument("--url")
     publish_cmd.add_argument("--force", action="store_true")
+    publish_cmd.add_argument("--skip-build", action="store_true", help=argparse.SUPPRESS)
     publish_cmd.set_defaults(func=publish)
+
+    build_cmd = subparsers.add_parser("build", help="Run the configured build without publishing")
+    build_cmd.set_defaults(func=build_project)
 
     preview_cmd = subparsers.add_parser("preview", help="Build and preview locally")
     preview_cmd.set_defaults(func=preview)
@@ -526,6 +630,11 @@ def build_parser() -> argparse.ArgumentParser:
     remove_cmd = subparsers.add_parser("unpublish", help="Remove the current project from the site")
     remove_cmd.add_argument("--yes", action="store_true")
     remove_cmd.set_defaults(func=unpublish)
+
+    github_cmd = subparsers.add_parser(
+        "enable-github", help="Publish automatically when this project's main branch is pushed"
+    )
+    github_cmd.set_defaults(func=enable_github)
     return parser
 
 

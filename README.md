@@ -36,6 +36,20 @@ sw open
 sw unpublish
 ```
 
+For a GitHub repository owned by `smwade`, opt into automatic publishing from
+its `main` branch:
+
+```sh
+sw enable-github
+git add .sw.json .github/workflows/publish-misc.yml
+git commit -m "Publish site automatically"
+git push
+```
+
+This registers only that repository's `main` branch in the AWS OIDC trust
+policy. GitHub receives short-lived credentials and no AWS keys are stored as
+repository secrets.
+
 Each project is uploaded only to `s3://seanwade.com/misc/<name>/`. CloudFront
 aliases are stored in the `seanwade-misc-routes` key-value store. Publishing
 refuses to replace an alias owned by another project unless `--force` is used.
