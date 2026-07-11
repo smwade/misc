@@ -153,7 +153,17 @@ def collect_files(root: Path, config: dict) -> tuple[Path, list[str]]:
         raise SwError("Output directory must stay inside the project.") from exc
 
     patterns = config.get("include") or ["**/*"]
-    excluded_parts = {".git", ".next", "node_modules", "out", "dist", "build", "__pycache__"}
+    excluded_parts = {
+        ".git",
+        ".github",
+        ".sw-tool",
+        ".next",
+        "node_modules",
+        "out",
+        "dist",
+        "build",
+        "__pycache__",
+    }
     files: list[str] = []
     for path in output.rglob("*"):
         if not path.is_file():

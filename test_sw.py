@@ -40,6 +40,16 @@ class SwTests(unittest.TestCase):
             self.assertEqual(output, root.resolve())
             self.assertEqual(files, ["guide.html"])
 
+    def test_collect_root_output_excludes_publisher_checkout(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "index.html").write_text("<h1>Site</h1>")
+            (root / ".sw-tool").mkdir()
+            (root / ".sw-tool" / "README.md").write_text("publisher")
+            config = {"output": ".", "include": ["**/*"]}
+            _output, files = sw.collect_files(root, config)
+            self.assertEqual(files, ["index.html"])
+
     def test_init_single_html_aliases_sibling_pages(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
